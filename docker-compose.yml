@@ -1,0 +1,178 @@
+version: '3.8'
+
+services:
+  # AI API Gateway
+  ai-gateway:
+    build: ./ai-backend/gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - ai-network
+
+  # Lesson Plan AI Service
+  lesson-plan-ai:
+    build: ./ai-backend/lesson-plan-ai
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/education_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_COGNITIVE_SEARCH_ENDPOINT=${AZURE_COGNITIVE_SEARCH_ENDPOINT}
+      - AZURE_COGNITIVE_SEARCH_KEY=${AZURE_COGNITIVE_SEARCH_KEY}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - ai-network
+    deploy:
+      replicas: 2
+
+  # Content Generation AI Service
+  content-gen-ai:
+    build: ./ai-backend/content-gen-ai
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+    depends_on:
+      - redis
+    networks:
+      - ai-network
+    deploy:
+      replicas: 2
+
+  # Assessment AI Service
+  assessment-ai:
+    build: ./ai-backend/assessment-ai
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/education_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - ai-network
+    deploy:
+      replicas: 2
+
+  # Teaching Agent AI Service
+  teaching-agent:
+    build: ./ai-backend/teaching-agent
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/education_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - ai-network
+    deploy:
+      replicas: 3
+
+  # Real-time Streaming AI Service
+  streaming-ai:
+    build: ./ai-backend/streaming-ai
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_SIGNALR_CONNECTION_STRING=${AZURE_SIGNALR_CONNECTION_STRING}
+    depends_on:
+      - redis
+    networks:
+      - ai-network
+    deploy:
+      replicas: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    networks:
+      - ai-network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=education_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai-network
+
+  # Celery Worker for Async Tasks
+  celery-worker:
+    build: ./ai-backend/celery-worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/education_db
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - ai-network
+    deploy:
+      replicas: 4
+
+  # Celery Beat Scheduler
+  celery-beat:
+    build: ./ai-backend/celery-beat
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - ai-network
+
+  # Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - ai-network
+
+  # Grafana for Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - ai-network
+
+volumes:
+  redis_data:
+  postgres_data:
+  grafana_data:
+
+networks:
+  ai-network:
+    driver: bridge 

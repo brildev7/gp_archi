@@ -1,0 +1,308 @@
+name: Deploy AI Education Platform
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AZURE_RESOURCE_GROUP: rg-ai-education-platform-dev
+  AZURE_CONTAINER_REGISTRY: acraieducationplatformdev
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio pytest-mock pytest-cov
+    
+    - name: Set up environment variables
+      run: |
+        echo "POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/test_db" >> $GITHUB_ENV
+        echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
+        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+        echo "TESTING=true" >> $GITHUB_ENV
+    
+    - name: Run database migrations
+      run: |
+        # Add migration commands here
+        echo "Running database migrations..."
+    
+    - name: Run tests with coverage
+      run: |
+        pytest --cov=ai-backend --cov-report=xml --cov-report=html
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run security scan with Bandit
+      run: |
+        pip install bandit[toml]
+        bandit -r ai-backend/ -f json -o bandit-report.json || true
+    
+    - name: Run dependency vulnerability scan
+      run: |
+        pip install safety
+        safety check --json --output safety-report.json || true
+    
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  build:
+    needs: [test, security-scan]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    strategy:
+      matrix:
+        service: [
+          'lesson-plan-ai',
+          'content-gen-ai', 
+          'assessment-ai',
+          'teaching-agent',
+          'streaming-ai',
+          'gateway'
+        ]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Azure Container Registry
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io
+        username: ${{ secrets.AZURE_ACR_USERNAME }}
+        password: ${{ secrets.AZURE_ACR_PASSWORD }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./ai-backend/${{ matrix.service }}
+        file: ./ai-backend/${{ matrix.service }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ steps.meta.outputs.created }}
+          VCS_REF=${{ github.sha }}
+
+  deploy-infrastructure:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+    
+    - name: Azure CLI login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Terraform Init
+      working-directory: ./terraform
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${{ secrets.TERRAFORM_STATE_RG }}" \
+          -backend-config="storage_account_name=${{ secrets.TERRAFORM_STATE_SA }}" \
+          -backend-config="container_name=tfstate" \
+          -backend-config="key=prod.terraform.tfstate"
+    
+    - name: Terraform Plan
+      working-directory: ./terraform
+      run: |
+        terraform plan \
+          -var="openai_api_key=${{ secrets.OPENAI_API_KEY }}" \
+          -var="environment=prod" \
+          -out=tfplan
+    
+    - name: Terraform Apply
+      working-directory: ./terraform
+      run: terraform apply -auto-approve tfplan
+
+  deploy-services:
+    needs: [deploy-infrastructure]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    strategy:
+      matrix:
+        service: [
+          'lesson-plan-ai',
+          'content-gen-ai',
+          'assessment-ai', 
+          'teaching-agent',
+          'streaming-ai',
+          'gateway'
+        ]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Azure CLI login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Deploy to Azure Container Instances
+      run: |
+        az container create \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ai-${{ matrix.service }}-prod \
+          --image ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ matrix.service }}:latest \
+          --cpu 2 \
+          --memory 4 \
+          --registry-login-server ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io \
+          --registry-username ${{ secrets.AZURE_ACR_USERNAME }} \
+          --registry-password ${{ secrets.AZURE_ACR_PASSWORD }} \
+          --environment-variables \
+            REDIS_URL="${{ secrets.AZURE_REDIS_CONNECTION_STRING }}" \
+            POSTGRES_URL="${{ secrets.AZURE_SQL_CONNECTION_STRING }}" \
+            OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            AZURE_OPENAI_ENDPOINT="${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
+            AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+            AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+            AZURE_COGNITIVE_SEARCH_ENDPOINT="${{ secrets.AZURE_COGNITIVE_SEARCH_ENDPOINT }}" \
+            AZURE_COGNITIVE_SEARCH_KEY="${{ secrets.AZURE_COGNITIVE_SEARCH_KEY }}" \
+            AZURE_SIGNALR_CONNECTION_STRING="${{ secrets.AZURE_SIGNALR_CONNECTION_STRING }}" \
+            ENVIRONMENT="production" \
+          --ports 8000 \
+          --protocol TCP \
+          --restart-policy Always
+
+  health-check:
+    needs: [deploy-services]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Wait for services to be ready
+      run: sleep 120
+    
+    - name: Health check - Gateway
+      run: |
+        curl -f http://ai-gateway-prod.azurecontainer.io:8000/health || exit 1
+    
+    - name: Health check - Lesson Plan AI
+      run: |
+        curl -f http://ai-lesson-plan-ai-prod.azurecontainer.io:8000/health || exit 1
+    
+    - name: Health check - Content Generation AI  
+      run: |
+        curl -f http://ai-content-gen-ai-prod.azurecontainer.io:8000/health || exit 1
+    
+    - name: Health check - Assessment AI
+      run: |
+        curl -f http://ai-assessment-ai-prod.azurecontainer.io:8000/health || exit 1
+    
+    - name: Health check - Teaching Agent
+      run: |
+        curl -f http://ai-teaching-agent-prod.azurecontainer.io:8000/health || exit 1
+    
+    - name: Health check - Streaming AI
+      run: |
+        curl -f http://ai-streaming-ai-prod.azurecontainer.io:8000/health || exit 1
+
+  notify:
+    needs: [health-check]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        text: |
+          Deployment Status: ${{ job.status }}
+          Branch: ${{ github.ref }}
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+      if: always() 

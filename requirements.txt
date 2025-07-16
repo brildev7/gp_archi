@@ -1,0 +1,138 @@
+# =================================
+# Core Web Framework
+# =================================
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# =================================
+# AI & Machine Learning
+# =================================
+openai==1.3.7
+azure-openai==1.3.0
+langchain==0.0.340
+langchain-openai==0.0.2
+langchain-community==0.0.4
+sentence-transformers==2.2.2
+numpy==1.24.3
+pandas==2.1.3
+scikit-learn==1.3.2
+
+# =================================
+# Azure Services
+# =================================
+azure-storage-blob==12.19.0
+azure-cosmos==4.5.1
+azure-search-documents==11.4.0
+azure-identity==1.15.0
+azure-keyvault-secrets==4.7.0
+azure-monitor-opentelemetry==1.1.1
+azure-signalr==1.0.0b2
+
+# =================================
+# Database & ORM
+# =================================
+sqlalchemy==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+databases[postgresql]==0.8.0
+
+# =================================
+# Caching & Message Queue
+# =================================
+redis==5.0.1
+celery==5.3.4
+kombu==5.3.4
+
+# =================================
+# HTTP & API Client
+# =================================
+httpx==0.25.2
+aiohttp==3.9.1
+requests==2.31.0
+
+# =================================
+# Authentication & Security
+# =================================
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+cryptography==41.0.7
+
+# =================================
+# Data Processing
+# =================================
+python-docx==1.1.0
+PyPDF2==3.0.1
+openpyxl==3.1.2
+Pillow==10.1.0
+python-magic==0.4.27
+
+# =================================
+# Real-time & WebSocket
+# =================================
+websockets==12.0
+python-socketio==5.10.0
+eventlet==0.33.3
+
+# =================================
+# Monitoring & Logging
+# =================================
+structlog==23.2.0
+prometheus-client==0.19.0
+sentry-sdk[fastapi]==1.38.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+
+# =================================
+# Configuration & Environment
+# =================================
+python-dotenv==1.0.0
+pyyaml==6.0.1
+click==8.1.7
+
+# =================================
+# Testing & Development
+# =================================
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+httpx==0.25.2
+factory-boy==3.3.0
+
+# =================================
+# Data Validation & Serialization
+# =================================
+marshmallow==3.20.1
+jsonschema==4.20.0
+
+# =================================
+# Utilities
+# =================================
+python-dateutil==2.8.2
+pytz==2023.3
+uuid==1.30
+python-slugify==8.0.1
+regex==2023.10.3
+
+# =================================
+# Text Processing & NLP
+# =================================
+nltk==3.8.1
+spacy==3.7.2
+textstat==0.7.3
+
+# =================================
+# File & Media Processing
+# =================================
+ffmpeg-python==0.2.0
+moviepy==1.0.3
+
+# =================================
+# Production Dependencies
+# =================================
+newrelic==9.2.0
+ddtrace==2.5.0 
